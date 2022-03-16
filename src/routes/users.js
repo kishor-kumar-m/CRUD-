@@ -14,7 +14,7 @@ router.post('/signup',signup);
 router.post('/login',login);
 router.patch('/update/:userId',update);
 router.delete('/delete/:userId',delete_user);
-router.get('/',users);
+router.get('/users',users);
 router.get('/:userId',user);
 
 

@@ -3,7 +3,8 @@ import morgan from 'morgan'
 import mongoose from 'mongoose'
 import bodyParser from 'body-parser'
 import userRoutes from './routes/users.js'
-
+import cors from 'cors'
+import redis from 'redis'
 
 
 const app = express()
@@ -20,9 +21,21 @@ mongoose.connection.once('open',function(){
 
 app.use(bodyParser.urlencoded({extended: false}));
 app.use(bodyParser.json());
+app.use(cors());
+
+
+app.use(function (req,res,next){
+    res.setHeader('Access-Control-Allow-Origin','*');
+    res.setHeader('Access-Control-Allow-Methods','GET,POST,OPTIONS,PUT,PATCH,DELETE');
+    res.setHeader('Access-Control-Allow-Headers','X-Requested-with,content-type');
+    res.setHeader('Access-Control-Allow-Credentials',true);
+
+    next();
+})
 
 
 app.use('/user', userRoutes)
+
 
 app.use((req, res, next) => {
     const error =new Error("not found");

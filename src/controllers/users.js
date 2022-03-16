@@ -1,36 +1,41 @@
-import mongoose from 'mongoose'
+import mongoose, { Mongoose } from 'mongoose'
 import bcrypt from 'bcrypt'
 const User = require('../models/user')
 import jwt from 'jsonwebtoken'
 import nodemailer from 'nodemailer'
 import { authSchema } from '../helpers/validator'
+import redis from 'redis'
+import util from 'util'
+import events from 'events';
 
 
-const transporter = nodemailer.createTransport({
-    service: "gmail", 
-    auth : {
-        user: "xxxxxxxxxx@gmail.com",
-        pass: 'xxxxxxxxxx'
-    }
-})
-         
+const client = redis.createClient({
+    port: 6379,
+    host: "127.0.0.1",
+  });
+  client.set = util.promisify(client.set);
+  client.get = util.promisify(client.get);
+
+
+
+
+
 /**Create an User with Joi validation and with mongoose  */
 exports.signup = async (req,res,next)=>{
   
     
     bcrypt.hash(req.body.password,10,(error,hash)=>{
-        if(error){
+        if(error){sendMail
             return res.status(500).json({
                 error:err
             });            
         }else{
             const user = new User({
-                _id : mongoose.Types.ObjectId(),
                 name : req.body.name,
                 mobile : req.body.mobile,
                 email : req.body.email,
                 password :hash
-        });
+         });
         const options = {
             abortEarly: false, // include all errors
             allowUnknown: true, // ignore unknown props
@@ -45,34 +50,39 @@ exports.signup = async (req,res,next)=>{
             })
         }
         else{
+        
         user
         .save()
         
         .then(result=>{
+            client.flushall('ASYNC');
             console.log(result);
             const options = {
-                from: "xxxxxxxx@gmail.com",
+                from: "korathop@gmail.com",
                 to: req.body.email,
                 subject: "Welcome Mail",
+                
                 text: `Hi  ${req.body.name} you have Succesfully Signed up`
             }
-            transporter.sendMail(options,function(err, info){
-                if (err){
-                    console.log(err)
-                    return
+            transporter.sendMail(options, function(err, success) {
+                if(err){
+                    console.log(err);
                 }
-                console.log(info.response)
+                if(success){
+                    this.events.emit('success', success);
+                }
             })
+            
             res.status(201).json({                
                 message :'User Created',               
                 createduser : result
+                
             });
         })
         .catch(err=>{
             console.log(err);
             res.status(500).json({
-                error : err,
-                message:'E-mail/Mobile Already taken'
+                error : err.message,
             })
          
         
@@ -129,17 +139,21 @@ exports.login =async (req,res,next) => {
 }; 
 
 /**Update the User details by calling with their id */
-exports.update = (req,res,next) =>{
+exports.update = async (req,res,next) =>{
     const id = req.params.userId;
+    const updates = req.body;
+    const options = {new : true};
+    await User.findByIdAndUpdate(id,updates,options)   
     
-    User.update({_id : id},{$set: req.body})
+ 
     .exec()
     .then(result => {
+        client.flushall('ASYNC');
         console.log(result);
         res.status(200).json(result);  
     })
     .catch(err => {
-        console.log(error);
+        console.log(err);
         res.status(500).json({
             error : err
         });
@@ -151,6 +165,7 @@ exports.delete_user = (req,res,next) =>{
     const id = req.params.userId;
     User.remove({
         _id : id
+        
     }).exec()
     .then(result => {
         res.status(200).json(result);
@@ -165,20 +180,26 @@ exports.delete_user = (req,res,next) =>{
 /** To get all the User and the details using get method 
  * req.query has been used for the pagination here
 */
-exports.users =(req,res,next) =>{
-    const {page = req.params.page, limit = req.params.limit} = req.query
+exports.users = async(req,res,next) =>{
+    const cachedPost = await client.get(`user`)
+    const {page = req.params.page || 1, limit = req.params.limit || 10} = req.query
     User.find().limit(limit*1).skip((page-1)*limit)
-
     .select('name email mobile')
     .exec()
     .then(docs => {
+        if(cachedPost){
+            const result = JSON.parse(cachedPost)       
+                return res.json({count:result.length,users:result,message:'retrieved from cache'})
+        }
+        if (docs){          
         const response ={
             count: docs.length,
             users: docs
 
         };
+        client.set(`user`,JSON.stringify(response)) 
     res.status(200).json(response);   
-    })
+    }})
     
     .catch(err =>{
         console.log(err);
@@ -191,18 +212,31 @@ exports.users =(req,res,next) =>{
 /**Exporting the User by the specific user_id for routes 
  * To see the details of the specific user
 */
-exports.user = (req,res,next) =>{
+exports.user = async (req,res,next) =>{
     const id= req.params.userId;
+    const cachedPost = await client.get(`user-${id}`)
+    
     User.findById(id)
+
     .exec()
     .then(doc => {
-        console.log(doc);
+    if(cachedPost){
+        const result = JSON.parse(cachedPost)       
+            return res.json({
+                name : result.name,
+                mail :result.email,
+                mobile : result.mobile,
+                message: "data retrieved from the cache"})
+        }
         if (doc){
-            res.status(200).json({
-              name :  doc.name,
-              mail :  doc.email,
-              mobile : doc.mobile              
-            });
+            console.log('doc',doc);
+        client.set(`user-${id}`,JSON.stringify(doc),"EX",3600)   
+        return res.status(200).json({
+        name :  doc.name,
+        mail :  doc.email,
+        mobile : doc.mobile              
+      });
+            
         }else{
             res.status(404).json({message: 'No Matching Id '})
         }
@@ -210,6 +244,6 @@ exports.user = (req,res,next) =>{
     })
     .catch(err => {
         console.log(err);
-        res.status(500).json({error:err});
+        res.status(500).json({error:err.message});
     });
 }
